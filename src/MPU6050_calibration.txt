@@ -1,3 +1,4 @@
+#if 0
 900ボーにすること！！
 
 // I2Cdev and MPU6050 must be installed as libraries
@@ -223,3 +224,4 @@ void loop() {
     while (1);
   }
 }
+#endif

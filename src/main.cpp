@@ -144,7 +144,7 @@ static void run_event_process() {
     }
 }
 
-// Run mode/eventにより、モーターの駆動力分配を行う
+// Run mode/eventに応じて以下LED処理を行う
 // Slope検出中：青色
 // Slope制御中：赤色
 // Rolling検出中：緑色
@@ -221,15 +221,22 @@ void loop() {
     uint8_t val_left, val_right;
     
     pixels.clear();
-    if (gz > 0) {
-        val_left = 127;
-        val_right = 127 - abs((gz >> 8));
-    } else {
-        val_left = 127 - abs((gz >> 8));
-        val_right = 127;
+    if (gx > 6000) { //傾斜突入 4m/sで10度 50cm→80deg/s→2500以上
+        pixels.setPixelColor(LED_LEFT, pixels.ColorHSV(0, 255, 255));
+        pixels.setPixelColor(LED_RIGHT, pixels.ColorHSV(0, 255, 255));
+    } else { //カーブ走行
+        if (gz > 0) {
+            val_left = 127;
+            val_right = 127 - abs((gz >> 8));
+        } else {
+            val_left = 127 - abs((gz >> 8));
+            val_right = 127;
+        }
+        pixels.setPixelColor(LED_LEFT, pixels.ColorHSV(16384, 255, val_left));
+        pixels.setPixelColor(LED_RIGHT, pixels.ColorHSV(16384, 255, val_right));
     }
-    pixels.setPixelColor(LED_LEFT, pixels.ColorHSV(16384, 255, val_left));
-    pixels.setPixelColor(LED_RIGHT, pixels.ColorHSV(16384, 255, val_right));
     pixels.show();
+    
+
     delay(100);
 }
