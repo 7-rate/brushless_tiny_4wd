@@ -12,8 +12,8 @@
 // ESC
 #define MAX_SIGNAL 2000
 #define MIN_SIGNAL 1000
-#define ESC_LEFT_PIN (PIN_PB2)
-#define ESC_RIGHT_PIN (PIN_PB1)
+#define ESC_LEFT_PIN (PIN_PA4)
+#define ESC_RIGHT_PIN (PIN_PA5)
 
 // LED
 #define LED_RIGHT (0)
@@ -157,20 +157,20 @@ static void led_process() {
 /* Global functions                */
 /***********************************/
 void setup() {
-    // pinMode(ESC_LEFT_PIN, OUTPUT);
-    // pinMode(ESC_RIGHT_PIN, OUTPUT);
+    pinMode(ESC_LEFT_PIN, OUTPUT);
+    pinMode(ESC_RIGHT_PIN, OUTPUT);
     
     // esc_left.attach(ESC_LEFT_PIN);
-    // esc_right.attach(ESC_RIGHT_PIN);
+    esc_right.attach(ESC_RIGHT_PIN);
 
-    // delay(2000); //ESC 位置同定待ち
+    delay(2000); //ESC 位置同定待ち
 
     // esc_left.writeMicroseconds(MIN_SIGNAL);
-    // esc_right.writeMicroseconds(MIN_SIGNAL);
-    // delay(2000);
+    esc_right.writeMicroseconds(MIN_SIGNAL);
+    delay(2000);
 
-    // esc_left.writeMicroseconds(MAX_SIGNAL);
-    // esc_right.writeMicroseconds(MAX_SIGNAL);
+    // esc_left.writeMicroseconds(1200);
+    esc_right.writeMicroseconds(1200);
 
     //mpu
     Wire.begin();
@@ -237,6 +237,5 @@ void loop() {
     }
     pixels.show();
     
-
     delay(100);
 }
