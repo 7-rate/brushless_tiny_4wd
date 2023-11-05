@@ -7,17 +7,33 @@
 /* Definitions                                                    */
 /******************************************************************/
 /***********************************/
+/* Calibration parameter           */
+/***********************************/
+// ESC 
+#define MAX_SIGNAL 2000 // power 100%
+#define MIN_SIGNAL 1000 // power 0%
+
+// 横転ギリギリ角速度
+#define MAX_ROLLING_GZ (29475) //450deg/s * 65.5(LSB)
+
+// スロープ検出角速度
+#define SLOOP_GX (3275) //50deg/s * 65.5(LSB)
+
+/***********************************/
 /* Local definitions               */
 /***********************************/
 // ESC
-#define MAX_SIGNAL 2000
-#define MIN_SIGNAL 1000
 #define ESC_LEFT_PIN (PIN_PA4)
 #define ESC_RIGHT_PIN (PIN_PA5)
 
 // LED
 #define LED_RIGHT (0)
 #define LED_LEFT (1)
+
+#define COLOR_SLOOP_PRE   (pixels.ColorHSV(43200, 255, 255)) //BLUE
+#define COLOR_SLOOP_DET   (pixels.ColorHSV(0, 255, 255)) //RED
+#define COLOR_ROLLING_PRE (pixels.ColorHSV(21600, 255, 255)) //GREEN
+#define COLOR_ROLLING_DET (pixels.ColorHSV(10800, 255, 255)) //YELLOW
 
 // MPU6050
 #define MPU6050_XA_OFFSET (-130 )
@@ -56,7 +72,7 @@ tinyNeoPixel pixels = tinyNeoPixel(2, PIN_PA1, NEO_GRB + NEO_KHZ800);
 // MPU6050
 MPU6050 mpu(0x68);
 int16_t ax, ay, az;
-int16_t gx, gy, gz; // gz:右回りが正
+int16_t gx, gy, gz; // LSB 0.1deg/s gz:右回りが正 range=500deg/s 65.5 = 1deg/s
 
 // Run mode/event
 int run_mode = RUN_MODE_STABLE;
@@ -87,24 +103,34 @@ void motor_drive(int left, int right) {
 }
 
 
-//横G = v^2/r
-//最小r = 0.4m 最大r = 0.7m
-//7m/s以上はカーブ走行不可(と仮定)
-//最大rのときの横G閾値 = 70m/s^2
+//横転ギリギリ検出
 bool rolling_judge() {
-    return (gz > 700);
+    uint16_t roll = abs(gz);
+    return (roll > MAX_ROLLING_GZ);
 }
 
-//1.2G以上
+//上りスロープ検出
 bool sloop_judge() {
-    return (gz > 12);
+    uint16_t sloop = abs(gx);
+    return (sloop > SLOOP_GX);
 }
 
+// gzに応じて左右モーターを制御する
+//gzから旋回中の左右駆動配分を決める。
+//ロールによる速度限界に近づくにつれ、内側のモーターを減速させる。
+//0deg/sを100%とし、450deg/sを0%とする。
+static void run_stable() {
+    long inside;
 
-// gzに応じて左右のモーターの駆動力分配を行う
-// 外輪を100とし、横G=5のときは内輪を50とする
-static void run_stable(int gx) {
+    inside = 100l - ((abs(gz) * 100l) / MAX_ROLLING_GZ);
+    limit(inside, 0, 100);
 
+    if (gz > 0) {
+        motor_drive(100, inside);
+
+    } else {
+        motor_drive(inside, 100);
+    }
 }
 
 // Run event判定
@@ -150,7 +176,43 @@ static void run_event_process() {
 // Rolling検出中：緑色
 // Rolling制御中：黄色
 static void led_process() {
+    uint32_t left_c, right_c;
+    uint8_t val_left, val_right;
 
+    pixels.clear();
+    switch (run_mode) {
+        case RUN_EVENT_ROLLING_PRE:
+            left_c = COLOR_ROLLING_PRE;
+            right_c = COLOR_ROLLING_PRE;
+            break;
+        case RUN_EVENT_ROLLING:
+            left_c = COLOR_ROLLING_DET;
+            right_c = COLOR_ROLLING_DET;
+            break;
+        case RUN_EVENT_SLOOPING_PRE:
+            left_c = COLOR_SLOOP_PRE;
+            right_c = COLOR_SLOOP_PRE;
+            break;
+        case RUN_EVENT_SLOOPING:
+            left_c = COLOR_SLOOP_DET;
+            right_c = COLOR_SLOOP_DET;
+            break;
+        case RUN_EVENT_NONE:
+        default:
+            if (gz > 0) {
+                val_left = 127;
+                val_right = 127 - abs((gz >> 8));
+            } else {
+                val_left = 127 - abs((gz >> 8));
+                val_right = 127;
+            }
+            left_c = pixels.ColorHSV(16384, 255, val_left);
+            right_c = pixels.ColorHSV(16384, 255, val_right);
+            break;
+    }
+    pixels.setPixelColor(LED_LEFT, left_c);
+    pixels.setPixelColor(LED_RIGHT, right_c);
+    pixels.show();
 }
 
 /***********************************/
@@ -185,7 +247,6 @@ void setup() {
 
     //neopixel
     pixels.begin();
-
 }
 
 void loop() {
@@ -194,48 +255,29 @@ void loop() {
 
     // //run mode
     run_event_process();
-    // switch (run_mode) {
-    //     case RUN_MODE_STABLE:
-    //         run_stable(gx);
-    //         if (run_event == RUN_EVENT_ROLLING) {
-    //             run_mode = RUN_MODE_ROLLOVER;
-    //         } else if (run_event == RUN_EVENT_SLOOPING) {
-    //             run_mode = RUN_MODE_SLOOP;
-    //         }
-    //         break;
-    //     case RUN_MODE_ROLLOVER:
-    //         //run_rollover(gx);
-    //         if (run_event == RUN_EVENT_NONE) {
-    //             run_mode = RUN_MODE_STABLE;
-    //         }
-    //         break;
-    //     case RUN_MODE_SLOOP:
-    //         //run_sloop(gx);
-    //         if (run_event == RUN_EVENT_NONE) {
-    //             run_mode = RUN_MODE_STABLE;
-    //         }
-    //         break;
-    // }
+    switch (run_mode) {
+        case RUN_MODE_STABLE:
+            run_stable();
+            if (run_event == RUN_EVENT_ROLLING) {
+                run_mode = RUN_MODE_ROLLOVER;
+            } else if (run_event == RUN_EVENT_SLOOPING) {
+                run_mode = RUN_MODE_SLOOP;
+            }
+            break;
+        case RUN_MODE_ROLLOVER:
+            //run_rollover(gx);
+            if (run_event == RUN_EVENT_NONE) {
+                run_mode = RUN_MODE_STABLE;
+            }
+            break;
+        case RUN_MODE_SLOOP:
+            //run_sloop(gx);
+            if (run_event == RUN_EVENT_NONE) {
+                run_mode = RUN_MODE_STABLE;
+            }
+            break;
+    }
 
     //neopixel
-    uint8_t val_left, val_right;
-    
-    pixels.clear();
-    if (gx > 6000) { //傾斜突入 4m/sで10度 50cm→80deg/s→2500以上
-        pixels.setPixelColor(LED_LEFT, pixels.ColorHSV(0, 255, 255));
-        pixels.setPixelColor(LED_RIGHT, pixels.ColorHSV(0, 255, 255));
-    } else { //カーブ走行
-        if (gz > 0) {
-            val_left = 127;
-            val_right = 127 - abs((gz >> 8));
-        } else {
-            val_left = 127 - abs((gz >> 8));
-            val_right = 127;
-        }
-        pixels.setPixelColor(LED_LEFT, pixels.ColorHSV(16384, 255, val_left));
-        pixels.setPixelColor(LED_RIGHT, pixels.ColorHSV(16384, 255, val_right));
-    }
-    pixels.show();
-    
-    delay(100);
+    led_process();
 }
