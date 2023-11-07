@@ -11,7 +11,7 @@
 /***********************************/
 // ESC 
 #define MAX_SIGNAL 2000 // power 100%
-#define MIN_SIGNAL 1000 // power 0%
+#define MIN_SIGNAL 700 // power 0%
 
 // 横転ギリギリ角速度
 #define MAX_ROLLING_GZ (29475) //450deg/s * 65.5(LSB)
@@ -20,13 +20,13 @@
 #define SLOPE_GX (3275) //50deg/s * 65.5(LSB)
 
 // スロープ検出からの減速時間
-#define SLOPE_SLOW_DOWN_TIME (100) //50ms
+#define SLOPE_SLOW_DOWN_TIME (100) //100ms
 
 // 横転ギリギリ検出時間
-#define ROLLING_DETECT_TIME (50) //50ms
+#define ROLLING_DETECT_TIME (200) //200ms
 
 // スロープ検出時間
-#define SLOPE_DETECT_TIME (50) //50ms
+#define SLOPE_DETECT_TIME (200) //200ms
 
 /***********************************/
 /* Local definitions               */
@@ -41,7 +41,7 @@
 
 #define COLOR_SLOPE_PRE   (pixels.ColorHSV(43200, 255, 255)) //BLUE
 #define COLOR_SLOPE_DET   (pixels.ColorHSV(0, 255, 255)) //RED
-#define COLOR_ROLLING_PRE (pixels.ColorHSV(21600, 255, 255)) //GREEN
+#define COLOR_ROLLING_PRE (pixels.ColorHSV(49151, 255, 255)) //PURPLE
 #define COLOR_ROLLING_DET (pixels.ColorHSV(10800, 255, 255)) //YELLOW
 
 // MPU6050
@@ -66,6 +66,8 @@ enum {
     RUN_EVENT_SLOPING,     //スロープ制御開始
     RUN_EVENT_NONE
 };
+
+#define RUN_LIMIT_TIME (10000) //10sec
 
 /***********************************/
 /* Local Variables                 */
@@ -95,6 +97,9 @@ bool slope_detected_mask = false;
 unsigned long tmr_slope_detected_mask;
 
 unsigned long tmr_slope_slow_down;
+
+// 走行時間制限
+unsigned long tmr_run_limit;
 
 /******************************************************************/
 /* Implementation                                                 */
@@ -165,14 +170,15 @@ static void run_slope() {
     motor_drive(0, 0);
 }
 
-
 // Run event判定
 static void run_event_process() {
+    int run_event_old = run_event;
     run_event = RUN_EVENT_NONE;
 
     //rolling_judgeがROLLING_DETECT_TIME(msec)継続したとき、run_event=RUN_EVENT_ROLLING
     //rolling_judgeがROLLING_DETECT_TIME(msec)未満のとき、run_event=RUN_EVENT_ROLLING_PRE
     if (rolling_judge()) {
+        run_event = RUN_EVENT_ROLLING_PRE;
         if (rolling_pre) {
             if (millis() - tmr_rolling_pre > ROLLING_DETECT_TIME) {
                 run_event = RUN_EVENT_ROLLING;
@@ -180,7 +186,6 @@ static void run_event_process() {
         } else {
             rolling_pre = true;
             tmr_rolling_pre = millis();
-            run_event = RUN_EVENT_ROLLING_PRE;
         }
     } else {
         rolling_pre = false;
@@ -190,19 +195,21 @@ static void run_event_process() {
     //slope_judgeがSLOPE_DETECT_TIME(msec)未満のとき、run_event=RUN_EVENT_SLOPING_PRE
     //2秒以内に再度スロープを検出した場合は下りスロープであるため、減速処理は行わない。→slope_detected_maskにてマスクを行う
     if (slope_judge() && !slope_detected_mask) {
+        run_event = RUN_EVENT_SLOPING_PRE;
         if (sloping_pre) {
             if (millis() - tmr_sloping_pre > SLOPE_DETECT_TIME) {
                 run_event = RUN_EVENT_SLOPING;
-                slope_detected_mask = true;
-                tmr_slope_detected_mask = millis();
             }
         } else {
             sloping_pre = true;
             tmr_sloping_pre = millis();
-            run_event = RUN_EVENT_SLOPING_PRE;
         }
     } else {
         sloping_pre = false;
+    }
+    if (run_event_old == RUN_EVENT_SLOPING && run_event != RUN_EVENT_SLOPING) {
+        slope_detected_mask = true;
+        tmr_slope_detected_mask = millis();
     }
     if (slope_detected_mask && millis() - tmr_slope_detected_mask > 2000) {
         slope_detected_mask = false;
@@ -212,14 +219,14 @@ static void run_event_process() {
 // Run mode/eventに応じて以下LED処理を行う
 // Slope検出中：青色
 // Slope制御中：赤色
-// Rolling検出中：緑色
+// Rolling検出中：紫色
 // Rolling制御中：黄色
 static void led_process() {
     uint32_t left_c, right_c;
     uint8_t val_left, val_right;
 
     pixels.clear();
-    switch (run_mode) {
+    switch (run_event) {
         case RUN_EVENT_ROLLING_PRE:
             left_c = COLOR_ROLLING_PRE;
             right_c = COLOR_ROLLING_PRE;
@@ -286,6 +293,9 @@ void setup() {
 
     //neopixel
     pixels.begin();
+
+    // 走行時間制限スタート
+    tmr_run_limit = millis();
 }
 
 void loop() {
@@ -320,4 +330,18 @@ void loop() {
 
     //neopixel
     led_process();
+
+    // 走行時間制限
+    if (millis() - tmr_run_limit > RUN_LIMIT_TIME) {
+        uint16_t hue = 0;
+        while(1) {
+            motor_drive(0, 0);
+            pixels.clear();
+            pixels.setPixelColor(LED_LEFT, pixels.ColorHSV(hue, 255, 255));
+            pixels.setPixelColor(LED_RIGHT, pixels.ColorHSV(hue, 255, 255));
+            hue += 100;
+            pixels.show();
+            delay(5);
+        }
+    }
 }
