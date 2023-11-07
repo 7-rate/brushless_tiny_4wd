@@ -17,7 +17,16 @@
 #define MAX_ROLLING_GZ (29475) //450deg/s * 65.5(LSB)
 
 // スロープ検出角速度
-#define SLOOP_GX (3275) //50deg/s * 65.5(LSB)
+#define SLOPE_GX (3275) //50deg/s * 65.5(LSB)
+
+// スロープ検出からの減速時間
+#define SLOPE_SLOW_DOWN_TIME (100) //50ms
+
+// 横転ギリギリ検出時間
+#define ROLLING_DETECT_TIME (50) //50ms
+
+// スロープ検出時間
+#define SLOPE_DETECT_TIME (50) //50ms
 
 /***********************************/
 /* Local definitions               */
@@ -30,8 +39,8 @@
 #define LED_RIGHT (0)
 #define LED_LEFT (1)
 
-#define COLOR_SLOOP_PRE   (pixels.ColorHSV(43200, 255, 255)) //BLUE
-#define COLOR_SLOOP_DET   (pixels.ColorHSV(0, 255, 255)) //RED
+#define COLOR_SLOPE_PRE   (pixels.ColorHSV(43200, 255, 255)) //BLUE
+#define COLOR_SLOPE_DET   (pixels.ColorHSV(0, 255, 255)) //RED
 #define COLOR_ROLLING_PRE (pixels.ColorHSV(21600, 255, 255)) //GREEN
 #define COLOR_ROLLING_DET (pixels.ColorHSV(10800, 255, 255)) //YELLOW
 
@@ -47,17 +56,16 @@
 enum {
     RUN_MODE_STABLE,
     RUN_MODE_ROLLOVER,
-    RUN_MODE_SLOOP
+    RUN_MODE_SLOPE
 };
 enum {
     RUN_EVENT_ROLLING_PRE,  //ローリング検出中
     RUN_EVENT_ROLLING,      //ローリング制御開始
-    RUN_EVENT_SLOOPING_PRE, //スロープ検出中
-    RUN_EVENT_SLOOPING,     //スロープ制御開始
+    RUN_EVENT_ROLLLING_END, //ローリング制御終了
+    RUN_EVENT_SLOPING_PRE, //スロープ検出中
+    RUN_EVENT_SLOPING,     //スロープ制御開始
     RUN_EVENT_NONE
 };
-#define ROLLING_DETECT_TIME (50) //50ms
-#define SLOOP_DETECT_TIME (50) //50ms
 
 /***********************************/
 /* Local Variables                 */
@@ -78,9 +86,15 @@ int16_t gx, gy, gz; // LSB 0.1deg/s gz:右回りが正 range=500deg/s 65.5 = 1de
 int run_mode = RUN_MODE_STABLE;
 int run_event = RUN_EVENT_NONE;
 bool rolling_pre = false;
-bool slooping_pre = false;
-unsigned long rolling_pre_time;
-unsigned long slooping_pre_time;
+bool sloping_pre = false;
+unsigned long tmr_rolling_pre;
+unsigned long tmr_sloping_pre;
+
+// slope用
+bool slope_detected_mask = false;
+unsigned long tmr_slope_detected_mask;
+
+unsigned long tmr_slope_slow_down;
 
 /******************************************************************/
 /* Implementation                                                 */
@@ -110,15 +124,15 @@ bool rolling_judge() {
 }
 
 //上りスロープ検出
-bool sloop_judge() {
-    uint16_t sloop = abs(gx);
-    return (sloop > SLOOP_GX);
+bool slope_judge() {
+    uint16_t slope = abs(gx);
+    return (slope > SLOPE_GX);
 }
 
 // gzに応じて左右モーターを制御する
-//gzから旋回中の左右駆動配分を決める。
-//ロールによる速度限界に近づくにつれ、内側のモーターを減速させる。
-//0deg/sを100%とし、450deg/sを0%とする。
+// gzから旋回中の左右駆動配分を決める。
+// ロールによる速度限界に近づくにつれ、内側のモーターを減速させる。
+// 0deg/sを100%とし、450deg/sを0%とする。
 static void run_stable() {
     long inside;
 
@@ -133,6 +147,25 @@ static void run_stable() {
     }
 }
 
+//横転回避制御
+//外側モーターを30%とし、内側モーターを0%とする。
+//400deg/s以下になったところで通常制御に移行する。
+static void run_rollover() {
+    if (gz > 0) {
+        motor_drive(30, 0);
+
+    } else {
+        motor_drive(0, 30);
+    }
+}
+
+//スロープ制御
+//スロープを検出した場合は両モーターを50ms間0%にし減速する。
+static void run_slope() {
+    motor_drive(0, 0);
+}
+
+
 // Run event判定
 static void run_event_process() {
     run_event = RUN_EVENT_NONE;
@@ -141,32 +174,38 @@ static void run_event_process() {
     //rolling_judgeがROLLING_DETECT_TIME(msec)未満のとき、run_event=RUN_EVENT_ROLLING_PRE
     if (rolling_judge()) {
         if (rolling_pre) {
-            if (millis() - rolling_pre_time > ROLLING_DETECT_TIME) {
+            if (millis() - tmr_rolling_pre > ROLLING_DETECT_TIME) {
                 run_event = RUN_EVENT_ROLLING;
             }
         } else {
             rolling_pre = true;
-            rolling_pre_time = millis();
+            tmr_rolling_pre = millis();
             run_event = RUN_EVENT_ROLLING_PRE;
         }
     } else {
         rolling_pre = false;
     }
 
-    //slope_judgeがSLOOP_DETECT_TIME(msec)継続したとき、run_event=RUN_EVENT_SLOOPING_PRE
-    //slope_judgeがSLOOP_DETECT_TIME(msec)未満のとき、run_event=RUN_EVENT_SLOOPING
-    if (sloop_judge()) {
-        if (slooping_pre) {
-            if (millis() - slooping_pre_time > SLOOP_DETECT_TIME) {
-                run_event = RUN_EVENT_SLOOPING;
+    //slope_judgeがSLOPE_DETECT_TIME(msec)継続したとき、run_event=RUN_EVENT_SLOPING
+    //slope_judgeがSLOPE_DETECT_TIME(msec)未満のとき、run_event=RUN_EVENT_SLOPING_PRE
+    //2秒以内に再度スロープを検出した場合は下りスロープであるため、減速処理は行わない。→slope_detected_maskにてマスクを行う
+    if (slope_judge() && !slope_detected_mask) {
+        if (sloping_pre) {
+            if (millis() - tmr_sloping_pre > SLOPE_DETECT_TIME) {
+                run_event = RUN_EVENT_SLOPING;
+                slope_detected_mask = true;
+                tmr_slope_detected_mask = millis();
             }
         } else {
-            slooping_pre = true;
-            slooping_pre_time = millis();
-            run_event = RUN_EVENT_SLOOPING_PRE;
+            sloping_pre = true;
+            tmr_sloping_pre = millis();
+            run_event = RUN_EVENT_SLOPING_PRE;
         }
     } else {
-        slooping_pre = false;
+        sloping_pre = false;
+    }
+    if (slope_detected_mask && millis() - tmr_slope_detected_mask > 2000) {
+        slope_detected_mask = false;
     }
 }
 
@@ -189,13 +228,13 @@ static void led_process() {
             left_c = COLOR_ROLLING_DET;
             right_c = COLOR_ROLLING_DET;
             break;
-        case RUN_EVENT_SLOOPING_PRE:
-            left_c = COLOR_SLOOP_PRE;
-            right_c = COLOR_SLOOP_PRE;
+        case RUN_EVENT_SLOPING_PRE:
+            left_c = COLOR_SLOPE_PRE;
+            right_c = COLOR_SLOPE_PRE;
             break;
-        case RUN_EVENT_SLOOPING:
-            left_c = COLOR_SLOOP_DET;
-            right_c = COLOR_SLOOP_DET;
+        case RUN_EVENT_SLOPING:
+            left_c = COLOR_SLOPE_DET;
+            right_c = COLOR_SLOPE_DET;
             break;
         case RUN_EVENT_NONE:
         default:
@@ -260,19 +299,20 @@ void loop() {
             run_stable();
             if (run_event == RUN_EVENT_ROLLING) {
                 run_mode = RUN_MODE_ROLLOVER;
-            } else if (run_event == RUN_EVENT_SLOOPING) {
-                run_mode = RUN_MODE_SLOOP;
+            } else if (run_event == RUN_EVENT_SLOPING) {
+                run_mode = RUN_MODE_SLOPE;
+                tmr_slope_slow_down = millis();
             }
             break;
         case RUN_MODE_ROLLOVER:
-            //run_rollover(gx);
+            run_rollover();
             if (run_event == RUN_EVENT_NONE) {
                 run_mode = RUN_MODE_STABLE;
             }
             break;
-        case RUN_MODE_SLOOP:
-            //run_sloop(gx);
-            if (run_event == RUN_EVENT_NONE) {
+        case RUN_MODE_SLOPE:
+            run_slope();
+            if (run_event == RUN_EVENT_NONE || tmr_slope_slow_down + SLOPE_SLOW_DOWN_TIME < millis()) {
                 run_mode = RUN_MODE_STABLE;
             }
             break;
