@@ -6,3 +6,8 @@
 * MPU6050(6軸IMU)
 * ブラシレスモーター、ESC
 * NeoPixel(WS2812B)
+* LiPo battery 2S
+* ATtiny1604
+
+## ソフト設計・仕様
+[こちら](memo.md)を参照。
