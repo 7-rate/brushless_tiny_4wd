@@ -10,8 +10,8 @@
 /* Calibration parameter           */
 /***********************************/
 // ESC 
-#define MAX_SIGNAL 2000 // power 100%
-#define MIN_SIGNAL 700 // power 0%
+#define MAX_SIGNAL 1200 // power 100%
+#define MIN_SIGNAL 800 // power 0%
 
 // 横転ギリギリ角速度
 #define MAX_ROLLING_GZ (29475) //450deg/s * 65.5(LSB)
@@ -268,22 +268,22 @@ void setup() {
     pinMode(ESC_LEFT_PIN, OUTPUT);
     pinMode(ESC_RIGHT_PIN, OUTPUT);
     
-    // esc_left.attach(ESC_LEFT_PIN);
+    esc_left.attach(ESC_LEFT_PIN);
     esc_right.attach(ESC_RIGHT_PIN);
 
     delay(2000); //ESC 位置同定待ち
 
-    // esc_left.writeMicroseconds(MIN_SIGNAL);
-    esc_right.writeMicroseconds(MIN_SIGNAL);
+    esc_left.writeMicroseconds(800);
+    esc_right.writeMicroseconds(800);
     delay(2000);
-
-    // esc_left.writeMicroseconds(1200);
-    esc_right.writeMicroseconds(1200);
+    esc_left.writeMicroseconds(0);
+    esc_right.writeMicroseconds(0);
 
     //mpu
     Wire.begin();
     mpu.initialize();
     mpu.setFullScaleGyroRange(MPU6050_IMU::MPU6050_GYRO_FS_500); // R=400のコースを10m/sで通過することを想定したレンジ
+    mpu.setDLPFMode(3); // 42Hz Delay:4.8ms
     mpu.setXAccelOffset(MPU6050_XA_OFFSET);
     mpu.setYAccelOffset(MPU6050_YA_OFFSET);
     mpu.setZAccelOffset(MPU6050_ZA_OFFSET);
@@ -293,6 +293,24 @@ void setup() {
 
     //neopixel
     pixels.begin();
+
+    //opening
+    bool left = false;
+    for ( int i = 0 ; i < 6; i++ ) {
+        pixels.clear();
+        if ( left ) {
+            pixels.setPixelColor(LED_LEFT, pixels.ColorHSV(0, 255, 255));
+            pixels.setPixelColor(LED_RIGHT, pixels.ColorHSV(0, 255, 0));
+        } else {
+            pixels.setPixelColor(LED_LEFT, pixels.ColorHSV(0, 255, 0));
+            pixels.setPixelColor(LED_RIGHT, pixels.ColorHSV(0, 255, 255));
+        }
+        left = !left;
+        pixels.show();
+        delay(100);
+    }
+    pixels.clear();
+    pixels.show();
 
     // 走行時間制限スタート
     tmr_run_limit = millis();
@@ -325,6 +343,9 @@ void loop() {
             if (run_event == RUN_EVENT_NONE || tmr_slope_slow_down + SLOPE_SLOW_DOWN_TIME < millis()) {
                 run_mode = RUN_MODE_STABLE;
             }
+            break;
+        default:
+            run_mode = RUN_MODE_STABLE;
             break;
     }
 
