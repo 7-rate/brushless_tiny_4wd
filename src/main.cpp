@@ -10,8 +10,8 @@
 /* Calibration parameter           */
 /***********************************/
 // ESC 
-#define MAX_SIGNAL 1200 // power 100%
-#define MIN_SIGNAL 800 // power 0%
+#define MAX_SIGNAL 1400 // power 100%
+#define MIN_SIGNAL 900 // power 0%
 
 // 横転ギリギリ角速度
 #define MAX_ROLLING_GZ (29475) //450deg/s * 65.5(LSB)
@@ -20,13 +20,16 @@
 #define SLOPE_GX (3275) //50deg/s * 65.5(LSB)
 
 // スロープ検出からの減速時間
-#define SLOPE_SLOW_DOWN_TIME (100) //100ms
+#define SLOPE_SLOW_DOWN_TIME (50) //ms
 
 // 横転ギリギリ検出時間
-#define ROLLING_DETECT_TIME (200) //200ms
+#define ROLLING_DETECT_TIME (200) //ms
 
 // スロープ検出時間
-#define SLOPE_DETECT_TIME (200) //200ms
+#define SLOPE_DETECT_TIME (200) //ms
+
+// スロープ検出マスク時間
+#define SLOPE_DETECT_MASK_TIME (500) //ms
 
 /***********************************/
 /* Local definitions               */
@@ -167,7 +170,7 @@ static void run_rollover() {
 //スロープ制御
 //スロープを検出した場合は両モーターを50ms間0%にし減速する。
 static void run_slope() {
-    motor_drive(0, 0);
+    motor_drive(20, 20);
 }
 
 // Run event判定
@@ -211,7 +214,7 @@ static void run_event_process() {
         slope_detected_mask = true;
         tmr_slope_detected_mask = millis();
     }
-    if (slope_detected_mask && millis() - tmr_slope_detected_mask > 2000) {
+    if (slope_detected_mask && millis() - tmr_slope_detected_mask > SLOPE_DETECT_MASK_TIME) {
         slope_detected_mask = false;
     }
 }
@@ -267,17 +270,27 @@ static void led_process() {
 void setup() {
     pinMode(ESC_LEFT_PIN, OUTPUT);
     pinMode(ESC_RIGHT_PIN, OUTPUT);
+    digitalWrite(ESC_LEFT_PIN, HIGH);
+    digitalWrite(ESC_RIGHT_PIN, HIGH);
+    delay(100);
+    digitalWrite(ESC_LEFT_PIN, LOW);
+    digitalWrite(ESC_RIGHT_PIN, LOW);
     
-    esc_left.attach(ESC_LEFT_PIN);
-    esc_right.attach(ESC_RIGHT_PIN);
+    esc_left.attach(ESC_LEFT_PIN, MIN_SIGNAL, MAX_SIGNAL);//22ms中1500us
+    esc_right.attach(ESC_RIGHT_PIN, MIN_SIGNAL, MAX_SIGNAL);
+    delay(100); //ESC 位置同定待ち
 
+    esc_left.writeMicroseconds(1200); //20ms中1200us
+    esc_right.writeMicroseconds(1200);
+
+    delay(100); //ESC 位置同定待ち
+
+    // esc_left.writeMicroseconds(1200); //20ms中1200us
+    // esc_right.writeMicroseconds(1200);
+    // delay(2000);
+    esc_left.writeMicroseconds(MIN_SIGNAL);
+    esc_right.writeMicroseconds(MIN_SIGNAL);
     delay(2000); //ESC 位置同定待ち
-
-    esc_left.writeMicroseconds(800);
-    esc_right.writeMicroseconds(800);
-    delay(2000);
-    esc_left.writeMicroseconds(0);
-    esc_right.writeMicroseconds(0);
 
     //mpu
     Wire.begin();
@@ -296,7 +309,7 @@ void setup() {
 
     //opening
     bool left = false;
-    for ( int i = 0 ; i < 6; i++ ) {
+    for ( int i = 0 ; i < 10; i++ ) {
         pixels.clear();
         if ( left ) {
             pixels.setPixelColor(LED_LEFT, pixels.ColorHSV(0, 255, 255));
