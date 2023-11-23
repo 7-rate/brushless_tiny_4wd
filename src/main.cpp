@@ -10,7 +10,7 @@
 /* Calibration parameter           */
 /***********************************/
 // ESC 
-#define MAX_SIGNAL 1400 // power 100%
+#define MAX_SIGNAL 1100 // power 100%
 #define MIN_SIGNAL 900 // power 0%
 
 // 横転ギリギリ角速度
@@ -70,7 +70,7 @@ enum {
     RUN_EVENT_NONE
 };
 
-#define RUN_LIMIT_TIME (10000) //10sec
+#define RUN_LIMIT_TIME (60000) //msec
 
 /***********************************/
 /* Local Variables                 */
@@ -104,6 +104,11 @@ unsigned long tmr_slope_slow_down;
 // 走行時間制限
 unsigned long tmr_run_limit;
 
+// motor command平滑用
+unsigned long tmr_motor_command;
+int left_signal_old = 0;
+int right_signal_old = 0;
+
 /******************************************************************/
 /* Implementation                                                 */
 /******************************************************************/
@@ -112,16 +117,27 @@ unsigned long tmr_run_limit;
 /***********************************/
 #define limit(x, min, max) do { if (x < min) x = min; else if (x > max) x = max; } while(0)
 
+void motor_command(int left_signal, int right_signal) {
+    int left = (left_signal * 8 + left_signal_old * 2)/10;
+    int right = (right_signal * 8 + right_signal_old * 2)/10;
+    esc_left.writeMicroseconds(left);
+    esc_right.writeMicroseconds(right);
+    left_signal_old = left_signal;
+    right_signal_old = right_signal;
+    tmr_motor_command = millis();
+}
+
 //0~100をMIN_SIGNAL~MAX_SIGNALで線形補完してwriteMicrosecondsに指定する
 void motor_drive(int left, int right) {
-    limit(left, 0, 100);
-    limit(right, 0, 100);
+    if (tmr_motor_command != millis()) {
+        limit(left, 0, 100);
+        limit(right, 0, 100);
 
-    int left_signal = (MAX_SIGNAL - MIN_SIGNAL) * left / 100 + MIN_SIGNAL;
-    int right_signal = (MAX_SIGNAL - MIN_SIGNAL) * right / 100 + MIN_SIGNAL;
+        int left_signal = (MAX_SIGNAL - MIN_SIGNAL) * left / 100 + MIN_SIGNAL;
+        int right_signal = (MAX_SIGNAL - MIN_SIGNAL) * right / 100 + MIN_SIGNAL;
 
-    esc_left.writeMicroseconds(left_signal);
-    esc_right.writeMicroseconds(right_signal);
+        motor_command(left_signal, right_signal);
+    }
 }
 
 
@@ -290,7 +306,7 @@ void setup() {
     // delay(2000);
     esc_left.writeMicroseconds(MIN_SIGNAL);
     esc_right.writeMicroseconds(MIN_SIGNAL);
-    delay(2000); //ESC 位置同定待ち
+    delay(4000); //ESC 位置同定待ち
 
     //mpu
     Wire.begin();
