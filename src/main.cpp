@@ -10,23 +10,24 @@
 /* Calibration parameter           */
 /***********************************/
 // ESC 
-#define MAX_SIGNAL 1100 // power 100%
+#define MAX_SIGNAL 1600 // power 100%
 #define MIN_SIGNAL 900 // power 0%
 
 // 横転ギリギリ角速度
-#define MAX_ROLLING_GZ (29475) //450deg/s * 65.5(LSB)
+#define MAX_ROLLING_GZ (20000) //450deg/s * 65.5(LSB)
+#define MAX_CURVE_GZ (10000) //450deg/s * 65.5(LSB)
 
 // スロープ検出角速度
-#define SLOPE_GX (3275) //50deg/s * 65.5(LSB)
-
-// スロープ検出からの減速時間
-#define SLOPE_SLOW_DOWN_TIME (50) //ms
+#define SLOPE_GX (1000) //50deg/s * 65.5(LSB)
 
 // 横転ギリギリ検出時間
 #define ROLLING_DETECT_TIME (200) //ms
 
 // スロープ検出時間
-#define SLOPE_DETECT_TIME (200) //ms
+#define SLOPE_DETECT_TIME (50) //ms
+
+// スロープ確定からの減速時間
+#define SLOPE_SLOW_DOWN_TIME (200) //ms
 
 // スロープ検出マスク時間
 #define SLOPE_DETECT_MASK_TIME (500) //ms
@@ -160,7 +161,7 @@ bool slope_judge() {
 static void run_stable() {
     long inside;
 
-    inside = 100l - ((abs(gz) * 100l) / MAX_ROLLING_GZ);
+    inside = 100l - ((abs(gz) * 100l) / MAX_CURVE_GZ);
     limit(inside, 0, 100);
 
     if (gz > 0) {
@@ -176,10 +177,10 @@ static void run_stable() {
 //400deg/s以下になったところで通常制御に移行する。
 static void run_rollover() {
     if (gz > 0) {
-        motor_drive(30, 0);
+        motor_drive(10, 0);
 
     } else {
-        motor_drive(0, 30);
+        motor_drive(0, 10);
     }
 }
 
@@ -246,14 +247,14 @@ static void led_process() {
 
     pixels.clear();
     switch (run_event) {
-        case RUN_EVENT_ROLLING_PRE:
-            left_c = COLOR_ROLLING_PRE;
-            right_c = COLOR_ROLLING_PRE;
-            break;
-        case RUN_EVENT_ROLLING:
-            left_c = COLOR_ROLLING_DET;
-            right_c = COLOR_ROLLING_DET;
-            break;
+        // case RUN_EVENT_ROLLING_PRE:
+            // left_c = COLOR_ROLLING_PRE;
+            // right_c = COLOR_ROLLING_PRE;
+            // break;
+        // case RUN_EVENT_ROLLING:
+            // left_c = COLOR_ROLLING_DET;
+            // right_c = COLOR_ROLLING_DET;
+            // break;
         case RUN_EVENT_SLOPING_PRE:
             left_c = COLOR_SLOPE_PRE;
             right_c = COLOR_SLOPE_PRE;
@@ -262,6 +263,8 @@ static void led_process() {
             left_c = COLOR_SLOPE_DET;
             right_c = COLOR_SLOPE_DET;
             break;
+        case RUN_EVENT_ROLLING_PRE:
+        case RUN_EVENT_ROLLING:
         case RUN_EVENT_NONE:
         default:
             if (gz > 0) {
