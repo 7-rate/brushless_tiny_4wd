@@ -14,23 +14,28 @@
 #define MIN_SIGNAL 900 // power 0%
 
 // 横転ギリギリ角速度
-#define MAX_ROLLING_GZ (20000) //450deg/s * 65.5(LSB)
-#define MAX_CURVE_GZ (10000) //450deg/s * 65.5(LSB)
-
-// スロープ検出角速度
-#define SLOPE_GX (1000) //50deg/s * 65.5(LSB)
-
+#define MAX_ROLLING_GZ (20000) //305deg/s * 65.5(LSB)
 // 横転ギリギリ検出時間
 #define ROLLING_DETECT_TIME (200) //ms
+// カーブによるIN 0% 基準
+#define CURVE_GZ (10000) //152deg/s
 
+
+// スロープ検出角速度
+#define SLOPE_GX (1000) //15deg/s * 65.5(LSB)
 // スロープ検出時間
 #define SLOPE_DETECT_TIME (50) //ms
-
 // スロープ確定からの減速時間
 #define SLOPE_SLOW_DOWN_TIME (200) //ms
-
 // スロープ検出マスク時間
-#define SLOPE_DETECT_MASK_TIME (500) //ms
+#define SLOPE_DETECT_MASK_TIME (1000) //ms
+
+
+// ソフトスタート時間
+#define SOFT_START_TIME (2000) //ms
+
+// 走行時間制限
+#define RUN_LIMIT_TIME (12000) //msec
 
 /***********************************/
 /* Local definitions               */
@@ -58,6 +63,7 @@
 
 // Run mode/event
 enum {
+    RUN_MODE_SOFT_START,
     RUN_MODE_STABLE,
     RUN_MODE_ROLLOVER,
     RUN_MODE_SLOPE
@@ -70,8 +76,6 @@ enum {
     RUN_EVENT_SLOPING,     //スロープ制御開始
     RUN_EVENT_NONE
 };
-
-#define RUN_LIMIT_TIME (60000) //msec
 
 /***********************************/
 /* Local Variables                 */
@@ -89,7 +93,7 @@ int16_t ax, ay, az;
 int16_t gx, gy, gz; // LSB 0.1deg/s gz:右回りが正 range=500deg/s 65.5 = 1deg/s
 
 // Run mode/event
-int run_mode = RUN_MODE_STABLE;
+int run_mode = RUN_MODE_SOFT_START;
 int run_event = RUN_EVENT_NONE;
 bool rolling_pre = false;
 bool sloping_pre = false;
@@ -105,10 +109,8 @@ unsigned long tmr_slope_slow_down;
 // 走行時間制限
 unsigned long tmr_run_limit;
 
-// motor command平滑用
-unsigned long tmr_motor_command;
-int left_signal_old = 0;
-int right_signal_old = 0;
+// ソフトスタート時間
+unsigned long tmr_soft_start;
 
 /******************************************************************/
 /* Implementation                                                 */
@@ -118,29 +120,17 @@ int right_signal_old = 0;
 /***********************************/
 #define limit(x, min, max) do { if (x < min) x = min; else if (x > max) x = max; } while(0)
 
-void motor_command(int left_signal, int right_signal) {
-    int left = (left_signal * 8 + left_signal_old * 2)/10;
-    int right = (right_signal * 8 + right_signal_old * 2)/10;
-    esc_left.writeMicroseconds(left);
-    esc_right.writeMicroseconds(right);
-    left_signal_old = left_signal;
-    right_signal_old = right_signal;
-    tmr_motor_command = millis();
-}
-
 //0~100をMIN_SIGNAL~MAX_SIGNALで線形補完してwriteMicrosecondsに指定する
 void motor_drive(int left, int right) {
-    if (tmr_motor_command != millis()) {
-        limit(left, 0, 100);
-        limit(right, 0, 100);
+    limit(left, 0, 100);
+    limit(right, 0, 100);
 
-        int left_signal = (MAX_SIGNAL - MIN_SIGNAL) * left / 100 + MIN_SIGNAL;
-        int right_signal = (MAX_SIGNAL - MIN_SIGNAL) * right / 100 + MIN_SIGNAL;
+    int left_signal = (MAX_SIGNAL - MIN_SIGNAL) * left / 100 + MIN_SIGNAL;
+    int right_signal = (MAX_SIGNAL - MIN_SIGNAL) * right / 100 + MIN_SIGNAL;
 
-        motor_command(left_signal, right_signal);
-    }
+    esc_left.writeMicroseconds(left_signal);
+    esc_right.writeMicroseconds(right_signal);
 }
-
 
 //横転ギリギリ検出
 bool rolling_judge() {
@@ -154,6 +144,14 @@ bool slope_judge() {
     return (slope > SLOPE_GX);
 }
 
+// ソフトスタート
+// SOFT_START_TIME時間かけて0~100%に加速する
+static void run_soft_start() {
+    int left = (100 * (millis() - tmr_soft_start)) / SOFT_START_TIME;
+    int right = (100 * (millis() - tmr_soft_start)) / SOFT_START_TIME;
+    motor_drive(left, right);
+}
+
 // gzに応じて左右モーターを制御する
 // gzから旋回中の左右駆動配分を決める。
 // ロールによる速度限界に近づくにつれ、内側のモーターを減速させる。
@@ -161,7 +159,7 @@ bool slope_judge() {
 static void run_stable() {
     long inside;
 
-    inside = 100l - ((abs(gz) * 100l) / MAX_CURVE_GZ);
+    inside = 100l - ((abs(gz) * 100l) / CURVE_GZ);
     limit(inside, 0, 100);
 
     if (gz > 0) {
@@ -267,13 +265,15 @@ static void led_process() {
         case RUN_EVENT_ROLLING:
         case RUN_EVENT_NONE:
         default:
-            if (gz > 0) {
-                val_left = 127;
-                val_right = 127 - abs((gz >> 8));
-            } else {
-                val_left = 127 - abs((gz >> 8));
-                val_right = 127;
-            }
+            // if (gz > 0) {
+            //     val_left = 127;
+            //     val_right = 127 - abs((gz >> 8));
+            // } else {
+            //     val_left = 127 - abs((gz >> 8));
+            //     val_right = 127;
+            // }
+            val_left = 0;
+            val_right = 0;
             left_c = pixels.ColorHSV(16384, 255, val_left);
             right_c = pixels.ColorHSV(16384, 255, val_right);
             break;
@@ -346,6 +346,7 @@ void setup() {
 
     // 走行時間制限スタート
     tmr_run_limit = millis();
+    tmr_soft_start = millis();
 }
 
 void loop() {
@@ -355,13 +356,19 @@ void loop() {
     // //run mode
     run_event_process();
     switch (run_mode) {
+        case RUN_MODE_SOFT_START:
+            run_soft_start();
+            if (tmr_soft_start + SOFT_START_TIME < millis()) {
+                run_mode = RUN_MODE_STABLE;
+            }
+            break;
         case RUN_MODE_STABLE:
             run_stable();
-            if (run_event == RUN_EVENT_ROLLING) {
-                run_mode = RUN_MODE_ROLLOVER;
-            } else if (run_event == RUN_EVENT_SLOPING) {
+            if (run_event == RUN_EVENT_SLOPING) {
                 run_mode = RUN_MODE_SLOPE;
                 tmr_slope_slow_down = millis();
+            } else if (run_event == RUN_EVENT_ROLLING) {
+                run_mode = RUN_MODE_ROLLOVER;
             }
             break;
         case RUN_MODE_ROLLOVER:
@@ -372,7 +379,7 @@ void loop() {
             break;
         case RUN_MODE_SLOPE:
             run_slope();
-            if (run_event == RUN_EVENT_NONE || tmr_slope_slow_down + SLOPE_SLOW_DOWN_TIME < millis()) {
+            if (tmr_slope_slow_down + SLOPE_SLOW_DOWN_TIME < millis()) {
                 run_mode = RUN_MODE_STABLE;
             }
             break;
